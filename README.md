@@ -8,13 +8,12 @@ N=100 standard-reference collaborator package.
 
 | Topic | Location |
 |---|---|
-| Current model definition, equations, and code | `pulmonary_fibrosis_model/` (`config.py`, `core.py`, `experiment.py`, `io.py`) |
-| Active parameters (network, mechanics, remodeling, softening) | `docs/model_parameters.md` |
-| Softening (FF-like) mechanism | `docs/model_parameters.md#ff-like-softening-intervention-softeningconfig-applied-in-corepy-apply_softening`, implemented in `pulmonary_fibrosis_model/core.py: apply_softening` |
-| Paired experiment / RNG design | `PIPELINE.md`, `scripts/run_pairs.py` |
-| Standard-reference morphometry (current publication definition) | `docs/model_parameters.md`, `analysis/standard_reference.py` |
-| Analysis and collaborator-package pipeline | `analysis/README.md`, `analysis/run_analysis.py`, `analysis/build_collaborator_package.py` |
-| Historical/legacy notebooks (not part of the validated pipeline) | `archive/legacy/` |
+| Model definition (geometry, mechanics, remodeling, softening equations) | `pulmonary_fibrosis_model/core.py` |
+| Active parameters (all groups: geometry, initial fibrosis, mechanics, remodeling, softening, RNG, solver, duration, morphometry) | `docs/model_parameters.md`, `pulmonary_fibrosis_model/config.py` |
+| Softening (FF-like) mechanism | current implementation in `pulmonary_fibrosis_model/core.py` (`apply_softening`); documented in `docs/model_parameters.md#5-ff-like-softening-intervention-softeningconfig-applied-in-corepy-apply_softening` |
+| Paired experiment and RNG design | `pulmonary_fibrosis_model/experiment.py`; workflow narrative in `PIPELINE.md`, driven by `scripts/run_pairs.py` |
+| Current standard-reference analysis (morphometry, aggregation, figures, collaborator package) | `analysis/standard_reference.py`, `analysis/morphometry.py`, `analysis/aggregate.py`, `analysis/run_analysis.py`, `analysis/collaborator_package.py`, `analysis/build_collaborator_package.py` (see also `analysis/README.md`) |
+| Historical/legacy notebooks and the deprecated self-normalized figure script (not part of the validated pipeline) | `archive/legacy/`; `analysis/generate_simple_main_figures.py` is marked legacy in-file (see `docs/model_parameters.md`) |
 
 ## Quickstart
 
