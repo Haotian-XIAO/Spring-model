@@ -1,5 +1,8 @@
 simulation_results/
 experiment_results/
+results/
+analysis_results/
+collaborator_package/
 __pycache__/
 *.py[cod]
 .venv/
