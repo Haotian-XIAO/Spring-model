@@ -1,7 +1,11 @@
 # Reproducible paired 0606 experiments
 
-The archival 0606 notebooks are preserved unchanged. The canonical new entry
-point is `scripts/run_pairs.py`, backed by `pulmonary_fibrosis_model`.
+The archival 0606 notebooks are preserved byte-for-byte, unchanged, in
+`archive/legacy/` (see `archive/legacy/README.md`) as historical provenance.
+The canonical entry point for current, tested code is `scripts/run_pairs.py`,
+backed by `pulmonary_fibrosis_model`. Full current parameter values are in
+`docs/model_parameters.md`, which is the source of truth over anything
+implied by the archival notebooks.
 
 ```bash
 python scripts/run_pairs.py 123 456 --config baseline --output-root experiment_results/run_001
@@ -56,7 +60,11 @@ make the software intervention unambiguous on a tiny network.
 
 Cell areas are direct shoelace areas of the persisted `hex_cells` polygons and
 deformed node coordinates. No preserved/remodeled cell threshold is imposed:
-the pipeline exports raw areas and normalized areas only.
+the pipeline exports raw areas and normalized areas only. The normalized area
+saved alongside each snapshot is the raw per-polygon self-normalized quantity
+`A_i(t) / A_i(0)`; current standard-reference figures instead use
+`A_i(t) / A_ref(seed)`, computed by `analysis/standard_reference.py`. See
+`docs/model_parameters.md` for the full distinction — do not conflate the two.
 
 Compact time-series QoIs are saved at every outer agent phase. Spatial NPZ
 snapshots are saved at the configurable selected-phase cadence (25 phases in

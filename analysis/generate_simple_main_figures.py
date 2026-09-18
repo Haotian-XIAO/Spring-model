@@ -4,6 +4,15 @@
 This script is deliberately read-only with respect to simulation outputs.  It
 loads the existing aggregate tables and saved spatial snapshots, then writes a
 new figure set without replacing the original analysis.
+
+LEGACY MORPHOMETRY WARNING: this script normalizes each polygon's area
+against its own stored ``normalized_cell_area`` (``A_i(t) / A_i(0)``,
+per-polygon self-normalization) rather than the current standard-reference
+definition ``A_i(t) / A_ref(seed)`` from ``analysis.standard_reference``. It
+predates the standard-reference fix. It is kept for forensic/legacy
+comparisons only and its output must NOT be presented or cited as the
+standard-reference workflow. See ``docs/model_parameters.md`` for both
+definitions and which one current standard-reference figures and videos use.
 """
 from __future__ import annotations
 
@@ -316,6 +325,8 @@ def write_text(output: Path) -> None:
         """# Simplified collaborator-facing N=100 figures
 
 These figures were generated from the completed N=100 paired simulations. No simulations were rerun, and the model equations, thresholds, statistics, and numerical results were not changed. In every comparison, **Difference = With softening − No softening**.
+
+**Legacy morphometry notice:** this simplified figure set normalizes each alveolus against its own initial area (per-polygon self-normalization), which predates the standard-reference definition. It is not the current standard-reference workflow; see the collaborator package's `00_README` and `docs/model_parameters.md` in the source repository for the standard-reference definition (`A_i(t) / A_ref(seed)`) used in current publication figures and videos.
 
 Alveolar regions are classified from area relative to the same region's initial area:
 
