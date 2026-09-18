@@ -57,6 +57,10 @@ class ModelConfig:
     w2: float = 1.0
     memory_factor: float = 1.0
     area_update_scale: float = 0.2
+    # ``legacy_additive`` reproduces the archival 0606 update exactly and is
+    # retained only for forensic comparisons.  Production keeps archival
+    # additive deposition and uses positive multiplicative degradation.
+    remodeling_law: str = "positive_degradation"
     p1: float = 0.01
     D0: float = 0.3
     Dmax: float = 3.0
@@ -85,7 +89,7 @@ class ModelConfig:
 
 
 def baseline_config() -> ModelConfig:
-    """Return the archival 0606 parameterization, without altering its values."""
+    """Return the production 0606 parameterization with positive remodeling."""
 
     return ModelConfig()
 

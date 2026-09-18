@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import platform
 from pathlib import Path
 import resource
@@ -28,8 +29,13 @@ def main() -> None:
     parser.add_argument("seed", type=int)
     parser.add_argument("--output-root", type=Path, default=Path("experiment_results/full_pair"))
     parser.add_argument("--dry-run", action="store_true", help="Validate the full configuration without starting mechanics")
+    parser.add_argument("--phases", type=int, help="Run this many full-geometry outer phases for diagnosis")
     arguments = parser.parse_args()
     config = baseline_config()
+    if arguments.phases is not None:
+        if arguments.phases < 1:
+            parser.error("--phases must be positive")
+        config = replace(config, agent_total_iterations=arguments.phases)
     if arguments.dry_run:
         print(
             f"validated full configuration: nx={config.nx}, ny={config.ny}, "

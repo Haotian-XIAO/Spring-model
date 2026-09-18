@@ -50,6 +50,120 @@ class EquilibriumInfo:
     final_energy: float
 
 
+class NumericalInstabilityError(RuntimeError):
+    """Raised before a non-finite mechanical state can be accepted or written."""
+
+
+def _extrema(values: np.ndarray | None) -> tuple[float | None, float | None]:
+    if values is None or not len(values):
+        return None, None
+    return float(np.min(values)), float(np.max(values))
+
+
+def _mechanical_diagnostic(
+    *,
+    stage: str,
+    outer_phase: int | None,
+    iteration: int | None,
+    condition: str | None,
+    points: np.ndarray,
+    edges: np.ndarray,
+    l0: float,
+    spring_constants: np.ndarray,
+    E: np.ndarray | None,
+    A: np.ndarray | None,
+    current_energy: float | None,
+    trial_energy: float | None,
+    temperature: float | None,
+    mu: float | None,
+    reason: str,
+    max_trial_displacement: float | None = None,
+) -> str:
+    """Format a complete, single-line first-instability report.
+
+    ``hypot`` avoids creating a second overflow while reporting an already bad
+    trial state.
+    """
+    vectors = points[edges[:, 1]] - points[edges[:, 0]]
+    lengths = np.hypot(vectors[:, 0], vectors[:, 1])
+    k_min, k_max = _extrema(spring_constants)
+    E_min, E_max = _extrema(E)
+    A_min, A_max = _extrema(A)
+    return (
+        "Numerical instability: "
+        f"reason={reason}; stage={stage}; condition={condition or 'unspecified'}; "
+        f"outer_phase={outer_phase}; mechanical_iteration={iteration}; "
+        f"max_abs_node_coordinate={float(np.max(np.abs(points))):.17g}; "
+        f"max_spring_length={float(np.max(lengths)):.17g}; "
+        f"k_min={k_min:.17g}; k_max={k_max:.17g}; "
+        f"E_min={E_min!r}; E_max={E_max!r}; A_min={A_min!r}; A_max={A_max!r}; "
+        f"current_energy={current_energy!r}; trial_energy={trial_energy!r}; "
+        f"temperature={temperature!r}; mu={mu!r}; max_trial_displacement={max_trial_displacement!r}"
+    )
+
+
+def _raise_if_nonfinite(
+    *,
+    stage: str,
+    outer_phase: int | None,
+    iteration: int | None,
+    condition: str | None,
+    points: np.ndarray,
+    edges: np.ndarray,
+    l0: float,
+    spring_constants: np.ndarray,
+    E: np.ndarray | None = None,
+    A: np.ndarray | None = None,
+    current_energy: float | None = None,
+    trial_energy: float | None = None,
+    temperature: float | None = None,
+    mu: float | None = None,
+    forces: np.ndarray | None = None,
+) -> None:
+    arrays = {
+        "coordinates": points,
+        "spring lengths": np.hypot(
+            points[edges[:, 1], 0] - points[edges[:, 0], 0],
+            points[edges[:, 1], 1] - points[edges[:, 0], 1],
+        ),
+        "spring stiffness": spring_constants,
+        "E": E,
+        "A": A,
+        "forces": forces,
+    }
+    bad = next((name for name, value in arrays.items() if value is not None and not np.all(np.isfinite(value))), None)
+    scalars = {"current energy": current_energy, "trial energy": trial_energy, "temperature": temperature, "mu": mu}
+    if bad is None:
+        bad = next((name for name, value in scalars.items() if value is not None and not math.isfinite(value)), None)
+    if bad is not None:
+        raise NumericalInstabilityError(
+            _mechanical_diagnostic(
+                stage=stage, outer_phase=outer_phase, iteration=iteration, condition=condition,
+                points=points, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+                current_energy=current_energy, trial_energy=trial_energy,
+                temperature=temperature, mu=mu, reason=f"non-finite {bad}",
+            )
+        )
+
+
+def _raise_if_nonpositive_stiffness(
+    *, stage: str, outer_phase: int | None, condition: str | None, state: ModelState, config: ModelConfig
+) -> None:
+    """A spring network energy is not bounded below once any k is non-positive.
+
+    This is an invariant check, not a clip: the archival remodeling update is
+    left unchanged and the run stops at its first unphysical state.
+    """
+    if np.any(state.spring_constants <= 0.0):
+        raise NumericalInstabilityError(_mechanical_diagnostic(
+            stage=stage, outer_phase=outer_phase, iteration=None, condition=condition,
+            points=state.points, edges=state.edges, l0=config.l0,
+            spring_constants=state.spring_constants, E=state.E, A=state.A,
+            current_energy=None, trial_energy=None, temperature=None, mu=None,
+            reason="non-positive spring stiffness: elastic energy is unbounded below",
+        ))
+
+
 def build_geometry(config: ModelConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Reproduce the 0606 notebook's hex geometry and boundary labeling."""
 
@@ -119,7 +233,9 @@ def compute_strain_and_stress(
     points: np.ndarray, edges: np.ndarray, l0: float, spring_constants: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     vectors = points[edges[:, 1]] - points[edges[:, 0]]
-    lengths = np.linalg.norm(vectors, axis=1)
+    lengths = np.hypot(vectors[:, 0], vectors[:, 1])
+    if not np.all(np.isfinite(lengths)) or not np.all(np.isfinite(spring_constants)):
+        raise NumericalInstabilityError("Non-finite coordinates, spring lengths, or stiffness in strain/stress calculation.")
     strain = (lengths - l0) / l0
     return strain, spring_constants * strain
 
@@ -127,22 +243,36 @@ def compute_strain_and_stress(
 def compute_total_energy(
     points: np.ndarray, edges: np.ndarray, l0: float, spring_constants: np.ndarray
 ) -> float:
-    lengths = np.linalg.norm(points[edges[:, 1]] - points[edges[:, 0]], axis=1)
-    return float(0.5 * np.sum(spring_constants * (lengths - l0) ** 2))
+    vectors = points[edges[:, 1]] - points[edges[:, 0]]
+    lengths = np.hypot(vectors[:, 0], vectors[:, 1])
+    with np.errstate(over="raise", invalid="raise"):
+        try:
+            energy = float(0.5 * np.sum(spring_constants * (lengths - l0) ** 2))
+        except FloatingPointError as error:
+            raise NumericalInstabilityError("Non-finite elastic-energy arithmetic.") from error
+    if not math.isfinite(energy):
+        raise NumericalInstabilityError("Non-finite elastic energy.")
+    return energy
 
 
 def compute_forces(
     points: np.ndarray, edges: np.ndarray, l0: float, spring_constants: np.ndarray
 ) -> np.ndarray:
     vectors = points[edges[:, 1]] - points[edges[:, 0]]
-    lengths = np.linalg.norm(vectors, axis=1)
+    lengths = np.hypot(vectors[:, 0], vectors[:, 1])
     if np.any(lengths == 0.0):
         raise RuntimeError("Zero-length spring encountered during force calculation.")
-    magnitudes = spring_constants * (lengths - l0)
-    edge_forces = (magnitudes / lengths)[:, None] * vectors
+    with np.errstate(over="raise", invalid="raise", divide="raise"):
+        try:
+            magnitudes = spring_constants * (lengths - l0)
+            edge_forces = (magnitudes / lengths)[:, None] * vectors
+        except FloatingPointError as error:
+            raise NumericalInstabilityError("Non-finite force arithmetic.") from error
     forces = np.zeros_like(points)
     np.add.at(forces, edges[:, 0], edge_forces)
     np.add.at(forces, edges[:, 1], -edge_forces)
+    if not np.all(np.isfinite(forces)):
+        raise NumericalInstabilityError("Non-finite nodal force.")
     return forces
 
 
@@ -155,22 +285,76 @@ def mechanical_equilibrate(
     config: ModelConfig,
     rng: np.random.Generator,
     max_iterations: int,
+    *,
+    stage: str = "control",
+    outer_phase: int | None = None,
+    condition: str | None = None,
+    E: np.ndarray | None = None,
+    A: np.ndarray | None = None,
 ) -> tuple[np.ndarray, EquilibriumInfo]:
     """The 0606 annealed force-relaxation algorithm with an explicit RNG."""
 
     current = points.copy()
     mu = config.mu
     temperature = config.temperature
-    previous_energy = compute_total_energy(current, edges, l0, spring_constants)
+    _raise_if_nonfinite(
+        stage=stage, outer_phase=outer_phase, iteration=0, condition=condition,
+        points=current, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+        temperature=temperature, mu=mu,
+    )
+    try:
+        previous_energy = compute_total_energy(current, edges, l0, spring_constants)
+    except NumericalInstabilityError as error:
+        raise NumericalInstabilityError(_mechanical_diagnostic(
+            stage=stage, outer_phase=outer_phase, iteration=0, condition=condition,
+            points=current, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+            current_energy=None, trial_energy=None, temperature=temperature, mu=mu, reason=str(error),
+        )) from error
     stagnation_counter = 0
     accepted_uphill = 0
     rejected_uphill = 0
 
     for iteration in range(1, max_iterations + 1):
-        forces = compute_forces(current, edges, l0, spring_constants)
+        try:
+            forces = compute_forces(current, edges, l0, spring_constants)
+        except NumericalInstabilityError as error:
+            raise NumericalInstabilityError(_mechanical_diagnostic(
+                stage=stage, outer_phase=outer_phase, iteration=iteration, condition=condition,
+                points=current, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+                current_energy=previous_energy, trial_energy=None, temperature=temperature, mu=mu, reason=str(error),
+            )) from error
+        _raise_if_nonfinite(
+            stage=stage, outer_phase=outer_phase, iteration=iteration, condition=condition,
+            points=current, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+            current_energy=previous_energy, temperature=temperature, mu=mu, forces=forces,
+        )
         candidate = current.copy()
-        candidate[free_nodes] += mu * forces[free_nodes]
-        new_energy = compute_total_energy(candidate, edges, l0, spring_constants)
+        with np.errstate(over="raise", invalid="raise"):
+            try:
+                trial_step = mu * forces[free_nodes]
+                max_trial_displacement = float(np.max(np.hypot(trial_step[:, 0], trial_step[:, 1]))) if len(trial_step) else 0.0
+                candidate[free_nodes] += trial_step
+            except FloatingPointError as error:
+                raise NumericalInstabilityError(_mechanical_diagnostic(
+                    stage=stage, outer_phase=outer_phase, iteration=iteration, condition=condition,
+                    points=current, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+                    current_energy=previous_energy, trial_energy=None, temperature=temperature, mu=mu,
+                    reason=f"non-finite trial displacement: {error}",
+                )) from error
+        _raise_if_nonfinite(
+            stage=stage, outer_phase=outer_phase, iteration=iteration, condition=condition,
+            points=candidate, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+            current_energy=previous_energy, temperature=temperature, mu=mu,
+        )
+        try:
+            new_energy = compute_total_energy(candidate, edges, l0, spring_constants)
+        except NumericalInstabilityError as error:
+            raise NumericalInstabilityError(_mechanical_diagnostic(
+                stage=stage, outer_phase=outer_phase, iteration=iteration, condition=condition,
+                points=candidate, edges=edges, l0=l0, spring_constants=spring_constants, E=E, A=A,
+                current_energy=previous_energy, trial_energy=None, temperature=temperature, mu=mu,
+                max_trial_displacement=max_trial_displacement, reason=str(error),
+            )) from error
         delta_energy = new_energy - previous_energy
         denominator = max(abs(new_energy), np.finfo(float).tiny)
         if abs(delta_energy) / denominator < config.tolerance:
@@ -187,7 +371,11 @@ def mechanical_equilibrate(
             previous_energy = new_energy
             mu *= 1.1
         else:
-            acceptance_probability = math.exp(-delta_energy / max(temperature, np.finfo(float).tiny))
+            # A non-finite trial was rejected above.  This additionally makes
+            # the Metropolis decision explicit and overflow-proof for very
+            # unfavorable but finite proposals.
+            exponent = -delta_energy / max(temperature, np.finfo(float).tiny)
+            acceptance_probability = 0.0 if exponent < math.log(np.finfo(float).tiny) else math.exp(exponent)
             if acceptance_draw < acceptance_probability:
                 current = candidate
                 previous_energy = new_energy
@@ -249,6 +437,10 @@ def make_initial_state(
         config,
         shared_mechanics_rng,
         config.preconvergence_iterations,
+        stage="preconvergence",
+        condition="common_initialization",
+        E=np.full(len(spring_constants), config.E_initial),
+        A=spring_constants,
     )
     strain, stress = compute_strain_and_stress(points, edges, config.l0, spring_constants)
     n_springs = len(edges)
@@ -279,7 +471,9 @@ def make_initial_state(
     return state, pre_info
 
 
-def update_activation_and_density(state: ModelState, config: ModelConfig) -> None:
+def update_activation_and_density(
+    state: ModelState, config: ModelConfig, *, stage: str = "control", outer_phase: int | None = None, condition: str | None = None
+) -> None:
     """Preserve the 0606 activation and deterministic density equations."""
 
     state.strain, state.stress = compute_strain_and_stress(
@@ -295,8 +489,33 @@ def update_activation_and_density(state: ModelState, config: ModelConfig) -> Non
         config.w1 * a_epsilon + config.w2 * a_k - config.activation_offset
     )
 
-    # Area remodeling remains separate from the FF intervention.
-    state.A = state.A + config.area_update_scale * state.activation * state.D
+    # ``A`` was initialized from spring stiffness in every archival "young"
+    # notebook.  It is therefore a positive stiffness/remodeling multiplier,
+    # not a measured geometric cross-sectional area.  The legacy additive
+    # rule is retained for forensic comparisons only; it can cross zero and
+    # makes k=E*A mechanically invalid.  The production map is its local,
+    # Positive activation retains the archival additive deposition exactly.
+    # Negative activation is degradation, for which an additive decrement can
+    # remove more material than remains.  Its local positive counterpart is
+    # A_ref exp((P a D)/A_ref) = A_ref + P a D + O((P a D)^2/A_ref) at the
+    # archival initial state.  It then slows as material is depleted and
+    # asymptotes to zero, without a floor or new parameter.
+    increment = config.area_update_scale * state.activation * state.D
+    if config.remodeling_law == "legacy_additive":
+        state.A = state.A + increment
+    elif config.remodeling_law == "positive_degradation":
+        if np.any(state.A <= 0.0):
+            raise NumericalInstabilityError("Positive remodeling requires A > 0 before its update.")
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            try:
+                growing = increment >= 0.0
+                state.A[growing] += increment[growing]
+                reference_A = np.where(state.initial_fibrotic, config.k_fibrosis, config.k_normal)
+                state.A[~growing] *= np.exp(increment[~growing] / reference_A[~growing])
+            except FloatingPointError as error:
+                raise NumericalInstabilityError("Non-finite positive-remodeling update.") from error
+    else:
+        raise ValueError(f"Unknown remodeling_law: {config.remodeling_law!r}")
 
     X = config.Dmax / config.D0
     p2 = config.p1 * len(state.points) / (len(state.edges) * config.D0)
@@ -305,9 +524,16 @@ def update_activation_and_density(state: ModelState, config: ModelConfig) -> Non
         p3 * state.activation - p2
     ) * state.D
     state.D = np.clip(state.D, config.D0, config.Dmax)
+    _raise_if_nonfinite(
+        stage=stage, outer_phase=outer_phase, iteration=None, condition=condition,
+        points=state.points, edges=state.edges, l0=config.l0,
+        spring_constants=state.spring_constants, E=state.E, A=state.A,
+    )
 
 
-def apply_softening(state: ModelState, config: ModelConfig, enable_softening: bool) -> None:
+def apply_softening(
+    state: ModelState, config: ModelConfig, enable_softening: bool, *, outer_phase: int | None = None, condition: str | None = None
+) -> None:
     """Apply one event at most once per eligible spring.
 
     At trigger, E falls immediately from its current value to
@@ -353,6 +579,18 @@ def apply_softening(state: ModelState, config: ModelConfig, enable_softening: bo
 
     # Exact archival equation, now allowing E to causally alter k.
     state.spring_constants = state.E * state.A
+    _raise_if_nonfinite(
+        stage="softening" if enable_softening else "control", outer_phase=outer_phase, iteration=None, condition=condition,
+        points=state.points, edges=state.edges, l0=config.l0,
+        spring_constants=state.spring_constants, E=state.E, A=state.A,
+    )
+    _raise_if_nonpositive_stiffness(
+        stage="softening" if enable_softening else "control",
+        outer_phase=outer_phase,
+        condition=condition,
+        state=state,
+        config=config,
+    )
 
 
 def state_fingerprint(state: ModelState) -> str:

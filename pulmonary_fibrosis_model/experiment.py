@@ -138,8 +138,9 @@ def simulate(
 
     for phase in range(1, config.agent_total_iterations + 1):
         # This retains the 0606 agent/area law.  Only E handling varies by condition.
-        update_activation_and_density(state, config)
-        apply_softening(state, config, enable_softening)
+        stage = "softening" if enable_softening else "control"
+        update_activation_and_density(state, config, stage=stage, outer_phase=phase, condition=condition)
+        apply_softening(state, config, enable_softening, outer_phase=phase, condition=condition)
         state.points, equilibrium = mechanical_equilibrate(
             state.points,
             state.edges,
@@ -149,6 +150,11 @@ def simulate(
             config,
             _phase_mechanics_rng(mechanics_stream_seed, phase),
             config.agent_update_interval,
+            stage=stage,
+            outer_phase=phase,
+            condition=condition,
+            E=state.E,
+            A=state.A,
         )
         # Phase-level QOIs are sampled after the mechanical solve.
         from .core import compute_strain_and_stress
